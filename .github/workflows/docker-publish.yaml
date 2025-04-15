@@ -1,0 +1,20 @@
+name: Docker build pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-push:
+    runs-on: [self-hosted, image-builder]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t techiescamp/go-color-app:latest ./color-go-app
+
+      - name: Push Docker image
+        run: docker push techiescamp/go-color-app:latest

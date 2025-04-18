@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"strings"
 
@@ -13,51 +15,64 @@ import (
 )
 
 func main() {
+	certFile := flag.String("tls-cert", "/etc/webhook/certs/tls.crt", "TLS certificate file")
+	keyFile := flag.String("tls-key", "/etc/webhook/certs/tls.key", "TLS key file")
+	flag.Parse()
+
 	http.HandleFunc("/validate", handleAdmissionReview)
-	fmt.Println("Starting webhook server on port 8443...")
-	err := http.ListenAndServeTLS(":8443", "/etc/webhook/certs/tls.crt", "/etc/webhook/certs/tls.key", nil)
+
+	log.Println("✅ Webhook server started on port 8443...")
+	err := http.ListenAndServeTLS(":8443", *certFile, *keyFile, nil)
 	if err != nil {
-		panic(err)
+		log.Fatalf("❌ Failed to start server: %v", err)
 	}
 }
 
 func handleAdmissionReview(w http.ResponseWriter, r *http.Request) {
-	var review admissionv1.AdmissionReview
+	var admissionReview admissionv1.AdmissionReview
+
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "could not read request", http.StatusBadRequest)
+		http.Error(w, "Could not read request body", http.StatusBadRequest)
+		log.Println("❌ Error reading request:", err)
 		return
 	}
 
-	err = json.Unmarshal(body, &review)
-	if err != nil {
-		http.Error(w, "could not parse admission review", http.StatusBadRequest)
+	if err := json.Unmarshal(body, &admissionReview); err != nil {
+		http.Error(w, "Could not parse admission review", http.StatusBadRequest)
+		log.Println("❌ Error unmarshaling admission review:", err)
 		return
 	}
+
+	review := admissionReview.Request
+	log.Printf("🔍 Reviewing resource: %s/%s", review.Kind.Kind, review.Name)
 
 	allowed := true
 	reason := ""
 
-	if review.Request.Kind.Kind == "Pod" {
+	if review.Kind.Kind == "Pod" {
 		var pod corev1.Pod
-		err := json.Unmarshal(review.Request.Object.Raw, &pod)
-		if err != nil {
-			http.Error(w, "could not parse pod object", http.StatusBadRequest)
+		if err := json.Unmarshal(review.Object.Raw, &pod); err != nil {
+			http.Error(w, "Could not parse pod object", http.StatusBadRequest)
+			log.Println("❌ Error parsing pod object:", err)
 			return
 		}
 
 		for _, container := range pod.Spec.Containers {
+			log.Printf("🔎 Checking image: %s", container.Image)
 			if !isDockerHubImage(container.Image) {
 				allowed = false
 				reason = fmt.Sprintf("Image %q is not from Docker Hub", container.Image)
+				log.Println("❌", reason)
 				break
 			}
 		}
 	}
 
 	response := admissionv1.AdmissionReview{
+		TypeMeta: admissionReview.TypeMeta,
 		Response: &admissionv1.AdmissionResponse{
-			UID:     review.Request.UID,
+			UID:     review.UID,
 			Allowed: allowed,
 		},
 	}
@@ -70,23 +85,20 @@ func handleAdmissionReview(w http.ResponseWriter, r *http.Request) {
 
 	respBytes, err := json.Marshal(response)
 	if err != nil {
-		http.Error(w, "could not encode response", http.StatusInternalServerError)
+		http.Error(w, "Could not marshal response", http.StatusInternalServerError)
+		log.Println("❌ Error marshaling response:", err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(respBytes)
+	log.Println("✅ AdmissionReview response sent")
 }
 
 func isDockerHubImage(image string) bool {
-	// If image contains a registry (like "quay.io/" or "gcr.io/"), deny it
-	if strings.Contains(image, "://") {
-		return false
+	// If the image contains a domain (registry), reject it unless it's docker.io
+	if strings.Contains(image, "/") && strings.Contains(image, ".") {
+		return strings.HasPrefix(image, "docker.io/")
 	}
-
-	if strings.HasPrefix(image, "docker.io/") || !strings.Contains(image, ".") {
-		return true
-	}
-
-	return false
+	return true // Accept images like 'nginx' or 'busybox'
 }

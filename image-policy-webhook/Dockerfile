@@ -15,4 +15,4 @@ COPY tls.crt tls.key ./
 
 EXPOSE 8443
 
-CMD ["./server"]
+CMD ["./server", "--tls-cert=/etc/webhook/certs/tls.crt", "--tls-key=/etc/webhook/certs/tls.key"]

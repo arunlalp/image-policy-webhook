@@ -3,11 +3,13 @@ FROM golang:1.20-alpine AS builder
 
 WORKDIR /app
 
-# Download dependencies first for better caching
+# First copy only the files needed for dependencies
 COPY go.mod go.sum ./
+
+# Download dependencies
 RUN go mod download
 
-# Copy source code
+# Now copy the rest of the files
 COPY . .
 
 # Build the application

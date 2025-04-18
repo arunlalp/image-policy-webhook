@@ -1,6 +1,6 @@
 module github.com/arunlalp/image-policy-webhook
 
-go 1.23.6
+go 1.20
 
 require (
 	k8s.io/api v0.32.3

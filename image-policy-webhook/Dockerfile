@@ -1,19 +1,11 @@
-# Stage 1: Build the Go binary
-FROM golang:1.23-alpine AS builder
+FROM python:3.9-slim
 
 WORKDIR /app
-COPY . .
 
-RUN go mod init webhook && \
-    go mod tidy && \
-    go build -o webhook-server main.go
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Stage 2: Create a minimal image
-FROM alpine:latest
+COPY image_policy_webhook.py .
 
-RUN apk add --no-cache ca-certificates
 
-WORKDIR /app
-COPY --from=builder /app/webhook-server .
-
-CMD ["/app/webhook-server"]
+CMD ["python", "image_policy_webhook.py"]

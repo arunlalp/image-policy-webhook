@@ -1,18 +1,21 @@
-FROM golang:1.23.6 as builder
+FROM golang:1.21-alpine AS builder
 
 WORKDIR /app
 COPY . .
 
-RUN go mod tidy
-RUN go build -o server
+RUN go mod download
+RUN go build -o webhook-server main.go
 
+# Final image
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+
+RUN apk add --no-cache ca-certificates
 
 WORKDIR /root/
-COPY --from=builder /app/server .
-COPY tls.crt tls.key ./
+COPY --from=builder /app/webhook-server .
+COPY tls.crt /etc/webhook/certs/tls.crt
+COPY tls.key /etc/webhook/certs/tls.key
 
 EXPOSE 8443
 
-CMD ["./server", "--tls-cert=/etc/webhook/certs/tls.crt", "--tls-key=/etc/webhook/certs/tls.key"]
+CMD ["./webhook-server", "--tls-cert=/etc/webhook/certs/tls.crt", "--tls-key=/etc/webhook/certs/tls.key"]

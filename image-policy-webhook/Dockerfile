@@ -1,4 +1,4 @@
-# Stage 1 - Build the binary
+# Stage 1 - Build binary
 FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
@@ -16,4 +16,4 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=builder /app/webhook-server .
 
-CMD ["/app/webhook-server", "--tls-cert=/etc/webhook/certs/tls.crt", "--tls-key=/etc/webhook/certs/tls.key"]
+CMD ["./webhook-server", "--tls-cert=/etc/webhook/certs/tls.crt", "--tls-key=/etc/webhook/certs/tls.key"]

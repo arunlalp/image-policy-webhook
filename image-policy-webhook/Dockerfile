@@ -26,8 +26,8 @@ RUN mkdir -p /app/certs
 
 # Copy TLS certificates (assumed to be in the same directory as Dockerfile)
 # Replace with actual certificate paths or mount them at runtime
-COPY tls.crt /app/certs/tls.crt
-COPY tls.key /app/certs/tls.key
+COPY certs/tls.crt /app/certs/tls.crt
+COPY certs/tls.key /app/certs/tls.key
 
 # Expose port 8080
 EXPOSE 8080

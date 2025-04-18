@@ -15,7 +15,7 @@ import (
 func main() {
 	http.HandleFunc("/validate", handleAdmissionReview)
 	fmt.Println("Starting webhook server on port 8443...")
-	err := http.ListenAndServeTLS(":8443", "tls.crt", "tls.key", nil)
+	err := http.ListenAndServeTLS(":8443", "/etc/webhook/certs/tls.crt", "/etc/webhook/certs/tls.key", nil)
 	if err != nil {
 		panic(err)
 	}

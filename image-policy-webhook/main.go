@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-
 func main() {
 	http.HandleFunc("/validate", handleAdmissionReview)
-	fmt.Println("Starting server on :8443...")
+	fmt.Println("Starting webhook server on port 8443...")
 	err := http.ListenAndServeTLS(":8443", "tls.crt", "tls.key", nil)
 	if err != nil {
 		panic(err)
@@ -23,21 +23,33 @@ func main() {
 
 func handleAdmissionReview(w http.ResponseWriter, r *http.Request) {
 	var review admissionv1.AdmissionReview
-	body, _ := ioutil.ReadAll(r.Body)
-	_ = json.Unmarshal(body, &review)
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "could not read request", http.StatusBadRequest)
+		return
+	}
+
+	err = json.Unmarshal(body, &review)
+	if err != nil {
+		http.Error(w, "could not parse admission review", http.StatusBadRequest)
+		return
+	}
 
 	allowed := true
 	reason := ""
 
-	// Only check if it's a pod
 	if review.Request.Kind.Kind == "Pod" {
 		var pod corev1.Pod
-		_ = json.Unmarshal(review.Request.Object.Raw, &pod)
+		err := json.Unmarshal(review.Request.Object.Raw, &pod)
+		if err != nil {
+			http.Error(w, "could not parse pod object", http.StatusBadRequest)
+			return
+		}
 
 		for _, container := range pod.Spec.Containers {
 			if !isDockerHubImage(container.Image) {
 				allowed = false
-				reason = fmt.Sprintf("Image %s is not from Docker Hub", container.Image)
+				reason = fmt.Sprintf("Image %q is not from Docker Hub", container.Image)
 				break
 			}
 		}
@@ -49,36 +61,32 @@ func handleAdmissionReview(w http.ResponseWriter, r *http.Request) {
 			Allowed: allowed,
 		},
 	}
+
 	if !allowed {
-		response.Response.Result = &corev1.Status{
+		response.Response.Result = &metav1.Status{
 			Message: reason,
 		}
 	}
 
-	respBytes, _ := json.Marshal(response)
+	respBytes, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, "could not encode response", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(respBytes)
 }
 
 func isDockerHubImage(image string) bool {
-	// Accept if image starts with docker.io or has no registry prefix
-	return image == "docker.io" || !containsRegistryPrefix(image)
-}
-
-func containsRegistryPrefix(image string) bool {
-	return !(len(image) >= 11 && image[:11] == "docker.io/") && !startsWithNoRegistry(image)
-}
-
-func startsWithNoRegistry(image string) bool {
-	// no domain prefix like "nginx", "library/nginx", or "user/image"
-	return !containsDotOrColon(image)
-}
-
-func containsDotOrColon(image string) bool {
-	for _, c := range image {
-		if c == '.' || c == ':' {
-			return true
-		}
+	// If image contains a registry (like "quay.io/" or "gcr.io/"), deny it
+	if strings.Contains(image, "://") {
+		return false
 	}
+
+	if strings.HasPrefix(image, "docker.io/") || !strings.Contains(image, ".") {
+		return true
+	}
+
 	return false
 }

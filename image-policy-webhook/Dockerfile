@@ -22,9 +22,12 @@ RUN apk --no-cache add ca-certificates && \
 
 WORKDIR /app
 
-# Copy binary and certs directory structure from builder
-COPY --from=builder /app/webhook-server .
-COPY --chown=appuser:appuser certs /etc/webhook/certs
+# Create certs directory with correct permissions
+RUN mkdir -p /etc/webhook/certs && \
+    chown appuser:appuser /etc/webhook/certs
+
+# Copy binary from builder
+COPY --from=builder --chown=appuser:appuser /app/webhook-server .
 
 # Use non-root user
 USER appuser

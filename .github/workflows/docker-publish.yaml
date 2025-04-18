@@ -1,6 +1,7 @@
 name: Docker build pipeline
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main

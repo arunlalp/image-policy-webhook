@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,7 +30,9 @@ func serve(w http.ResponseWriter, r *http.Request) {
 	containers := podSpec["spec"].(map[string]interface{})["containers"].([]interface{})
 	for _, c := range containers {
 		image := c.(map[string]interface{})["image"].(string)
-		if !(startsWithDockerIO(image) || isImplicitDockerHubImage(image)) {
+
+		// Corrected logic using strings.HasPrefix
+		if !(strings.HasPrefix(image, "docker.io/") || isImplicitDockerHubImage(image)) {
 			allowed = false
 			message = fmt.Sprintf("Only images from docker.io are allowed. Image %s is denied.", image)
 			break
@@ -49,22 +52,8 @@ func serve(w http.ResponseWriter, r *http.Request) {
 	w.Write(resp)
 }
 
-func startsWithDockerIO(image string) bool {
-	return len(image) >= 11 && image[:11] == "docker.io/"
-}
-
 func isImplicitDockerHubImage(image string) bool {
-	// No registry prefix (e.g., "nginx", "library/nginx") means it's implicitly from docker.io
-	return !containsDotOrColon(image)
-}
-
-func containsDotOrColon(s string) bool {
-	for _, r := range s {
-		if r == '.' || r == ':' {
-			return true
-		}
-	}
-	return false
+	return !strings.Contains(image, ".") && !strings.Contains(image, ":")
 }
 
 func main() {

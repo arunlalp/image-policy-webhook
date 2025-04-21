@@ -2,111 +2,52 @@ package main
 
 import (
 	"encoding/json"
-	"io"
-	"log"
+	"fmt"
 	"net/http"
-	"strings"
 
-	"github.com/gorilla/mux"
 	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-type AdmissionReview struct {
-	*admissionv1.AdmissionReview
-}
+func serve(w http.ResponseWriter, r *http.Request) {
+	var review admissionv1.AdmissionReview
+	if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
 
-type Pod struct {
-	Spec struct {
-		Containers []struct {
-			Image string `json:"image"`
-		} `json:"containers"`
-	} `json:"spec"`
+	allowed := true
+	message := ""
+
+	pod := review.Request.Object.Raw
+	var podSpec map[string]interface{}
+	json.Unmarshal(pod, &podSpec)
+
+	containers := podSpec["spec"].(map[string]interface{})["containers"].([]interface{})
+	for _, c := range containers {
+		image := c.(map[string]interface{})["image"].(string)
+		if len(image) < 8 || image[:8] != "ghcr.io" {
+			allowed = false
+			message = fmt.Sprintf("Only images from ghcr.io are allowed. Image %s is denied.", image)
+			break
+		}
+	}
+
+	review.Response = &admissionv1.AdmissionResponse{
+		UID:     review.Request.UID,
+		Allowed: allowed,
+		Result: &metav1.Status{
+			Message: message,
+		},
+	}
+
+	resp, _ := json.Marshal(review)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(resp)
 }
 
 func main() {
-	r := mux.NewRouter()
-	r.HandleFunc("/validate", validateImage).Methods("POST")
-
-	// Start HTTPS server with TLS certificates
-	log.Println("Starting server on :8080...")
-	err := http.ListenAndServeTLS(":8080", "/app/certs/tls.crt", "/app/certs/tls.key", r)
-	if err != nil {
-		log.Fatal("ListenAndServeTLS: ", err)
-	}
-}
-
-func validateImage(w http.ResponseWriter, r *http.Request) {
-	allowedRegistries := []string{"registry.example.com", "docker.io"}
-
-	// Read request body
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Unable to read request body", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	// Parse admission review request
-	var admissionReview AdmissionReview
-	if err := json.Unmarshal(body, &admissionReview); err != nil {
-		http.Error(w, "Unable to parse admission review", http.StatusBadRequest)
-		return
-	}
-
-	// Extract pod object
-	var pod Pod
-	if err := json.Unmarshal(admissionReview.Request.Object.Raw, &pod); err != nil {
-		http.Error(w, "Unable to parse pod object", http.StatusBadRequest)
-		return
-	}
-
-	// Validate container images
-	for _, container := range pod.Spec.Containers {
-		parts := strings.Split(container.Image, "/")
-		registry := parts[0]
-
-		allowed := false
-		for _, allowedRegistry := range allowedRegistries {
-			if registry == allowedRegistry {
-				allowed = true
-				break
-			}
-		}
-
-		if !allowed {
-			response := admissionv1.AdmissionReview{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: "admission.k8s.io/v1",
-					Kind:       "AdmissionReview",
-				},
-				Response: &admissionv1.AdmissionResponse{
-					UID:     admissionReview.Request.UID,
-					Allowed: false,
-					Result: &metav1.Status{
-						Message: "Image " + container.Image + " is not allowed. Allowed registries: " + strings.Join(allowedRegistries, ", "),
-					},
-				},
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-			return
-		}
-	}
-
-	// If all images are valid
-	response := admissionv1.AdmissionReview{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "admission.k8s.io/v1",
-			Kind:       "AdmissionReview",
-		},
-		Response: &admissionv1.AdmissionResponse{
-			UID:     admissionReview.Request.UID,
-			Allowed: true,
-		},
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	http.HandleFunc("/validate", serve)
+	fmt.Println("Starting server on port 8443...")
+	http.ListenAndServeTLS(":8443", "/etc/webhook/certs/tls.crt", "/etc/webhook/certs/tls.key", nil)
 }

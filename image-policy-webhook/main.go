@@ -21,12 +21,15 @@ func serve(w http.ResponseWriter, r *http.Request) {
 
 	pod := review.Request.Object.Raw
 	var podSpec map[string]interface{}
-	json.Unmarshal(pod, &podSpec)
+	if err := json.Unmarshal(pod, &podSpec); err != nil {
+		http.Error(w, "Invalid pod spec", http.StatusInternalServerError)
+		return
+	}
 
 	containers := podSpec["spec"].(map[string]interface{})["containers"].([]interface{})
 	for _, c := range containers {
 		image := c.(map[string]interface{})["image"].(string)
-		if len(image) < 10 || (image[:10] != "docker.io" && !isImplicitDockerHubImage(image)) {
+		if !(startsWithDockerIO(image) || isImplicitDockerHubImage(image)) {
 			allowed = false
 			message = fmt.Sprintf("Only images from docker.io are allowed. Image %s is denied.", image)
 			break
@@ -46,9 +49,13 @@ func serve(w http.ResponseWriter, r *http.Request) {
 	w.Write(resp)
 }
 
-// Handles cases like "nginx" or "library/nginx"
+func startsWithDockerIO(image string) bool {
+	return len(image) >= 11 && image[:11] == "docker.io/"
+}
+
 func isImplicitDockerHubImage(image string) bool {
-	return !containsDotOrColon(image) // no registry prefix, means it's implicitly docker.io
+	// No registry prefix (e.g., "nginx", "library/nginx") means it's implicitly from docker.io
+	return !containsDotOrColon(image)
 }
 
 func containsDotOrColon(s string) bool {
@@ -63,5 +70,7 @@ func containsDotOrColon(s string) bool {
 func main() {
 	http.HandleFunc("/validate", serve)
 	fmt.Println("Starting server on port 8443...")
-	http.ListenAndServeTLS(":8443", "/etc/webhook/certs/tls.crt", "/etc/webhook/certs/tls.key", nil)
+	if err := http.ListenAndServeTLS(":8443", "/etc/webhook/certs/tls.crt", "/etc/webhook/certs/tls.key", nil); err != nil {
+		panic(err)
+	}
 }

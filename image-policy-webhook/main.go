@@ -26,9 +26,9 @@ func serve(w http.ResponseWriter, r *http.Request) {
 	containers := podSpec["spec"].(map[string]interface{})["containers"].([]interface{})
 	for _, c := range containers {
 		image := c.(map[string]interface{})["image"].(string)
-		if len(image) < 8 || image[:8] != "ghcr.io" {
+		if len(image) < 10 || (image[:10] != "docker.io" && !isImplicitDockerHubImage(image)) {
 			allowed = false
-			message = fmt.Sprintf("Only images from ghcr.io are allowed. Image %s is denied.", image)
+			message = fmt.Sprintf("Only images from docker.io are allowed. Image %s is denied.", image)
 			break
 		}
 	}
@@ -44,6 +44,20 @@ func serve(w http.ResponseWriter, r *http.Request) {
 	resp, _ := json.Marshal(review)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(resp)
+}
+
+// Handles cases like "nginx" or "library/nginx"
+func isImplicitDockerHubImage(image string) bool {
+	return !containsDotOrColon(image) // no registry prefix, means it's implicitly docker.io
+}
+
+func containsDotOrColon(s string) bool {
+	for _, r := range s {
+		if r == '.' || r == ':' {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {

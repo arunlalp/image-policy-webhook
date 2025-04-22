@@ -31,7 +31,7 @@ func serve(w http.ResponseWriter, r *http.Request) {
 	for _, c := range containers {
 		image := c.(map[string]interface{})["image"].(string)
 
-		// Corrected logic using strings.HasPrefix
+		// Allow only docker.io/ or implicit DockerHub images
 		if !(strings.HasPrefix(image, "docker.io/") || isImplicitDockerHubImage(image)) {
 			allowed = false
 			message = fmt.Sprintf("Only images from docker.io are allowed. Image %s is denied.", image)
@@ -39,7 +39,7 @@ func serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	review.Response = &admissionv1.AdmissionResponse{
+	admissionResponse := &admissionv1.AdmissionResponse{
 		UID:     review.Request.UID,
 		Allowed: allowed,
 		Result: &metav1.Status{
@@ -47,9 +47,22 @@ func serve(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	resp, _ := json.Marshal(review)
+	responseReview := admissionv1.AdmissionReview{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "admission.k8s.io/v1",
+			Kind:       "AdmissionReview",
+		},
+		Response: admissionResponse,
+	}
+
+	respBytes, err := json.Marshal(responseReview)
+	if err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(resp)
+	w.Write(respBytes)
 }
 
 func isImplicitDockerHubImage(image string) bool {

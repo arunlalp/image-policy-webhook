@@ -20,6 +20,7 @@ func serve(w http.ResponseWriter, r *http.Request) {
 	allowed := true
 	message := ""
 
+	// Extract pod object
 	pod := review.Request.Object.Raw
 	var podSpec map[string]interface{}
 	if err := json.Unmarshal(pod, &podSpec); err != nil {
@@ -31,7 +32,6 @@ func serve(w http.ResponseWriter, r *http.Request) {
 	for _, c := range containers {
 		image := c.(map[string]interface{})["image"].(string)
 
-		// Allow only docker.io/ or implicit DockerHub images
 		if !(strings.HasPrefix(image, "docker.io/") || isImplicitDockerHubImage(image)) {
 			allowed = false
 			message = fmt.Sprintf("Only images from docker.io are allowed. Image %s is denied.", image)
@@ -39,23 +39,22 @@ func serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	admissionResponse := &admissionv1.AdmissionResponse{
-		UID:     review.Request.UID,
-		Allowed: allowed,
-		Result: &metav1.Status{
-			Message: message,
-		},
-	}
-
-	responseReview := admissionv1.AdmissionReview{
+	// Build full AdmissionReview response
+	response := admissionv1.AdmissionReview{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "admission.k8s.io/v1",
 			Kind:       "AdmissionReview",
 		},
-		Response: admissionResponse,
+		Response: &admissionv1.AdmissionResponse{
+			UID:     review.Request.UID,
+			Allowed: allowed,
+			Result: &metav1.Status{
+				Message: message,
+			},
+		},
 	}
 
-	respBytes, err := json.Marshal(responseReview)
+	respBytes, err := json.Marshal(response)
 	if err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 		return
@@ -71,7 +70,7 @@ func isImplicitDockerHubImage(image string) bool {
 
 func main() {
 	http.HandleFunc("/validate", serve)
-	fmt.Println("Starting server on port 8443...")
+	fmt.Println("✅ Webhook server started on port 8443")
 	if err := http.ListenAndServeTLS(":8443", "/etc/webhook/certs/tls.crt", "/etc/webhook/certs/tls.key", nil); err != nil {
 		panic(err)
 	}

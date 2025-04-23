@@ -30,11 +30,10 @@
     # Copy the webhook binary and certs from the builder
     COPY --from=builder /app/webhook-server /app/
     COPY --from=builder /app/certs /app/certs
-    COPY --from=builder /app/keys /app/keys
     
     # Environment variables (not sensitive, just paths)
     ENV CERT_FILE=/app/certs/webhook-server.crt
-    ENV KEY_FILE=/app/keys/webhook-server.key
+    ENV KEY_FILE=/app/certs/webhook-server.key
     ENV PORT=8443
     
     # Create and use non-root user

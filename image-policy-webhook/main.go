@@ -10,9 +10,6 @@ import (
 	"strings"
 )
 
-// Allowed image name
-const ALLOWED = "nginx"
-
 // ImageReview represents the structure of the incoming JSON
 type ImageReview struct {
 	Spec struct {
@@ -91,14 +88,16 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Check images
 		for _, container := range review.Spec.Containers {
-			if strings.Contains(container.Image, ALLOWED) {
+			image := container.Image
+			// Allow images from docker.io or implicit Docker Hub (no registry prefix)
+			if strings.HasPrefix(image, "docker.io/") || !strings.Contains(image, "/") {
 				review.Status = map[string]interface{}{
 					"allowed": true,
 				}
 			} else {
 				review.Status = map[string]interface{}{
 					"allowed": false,
-					"reason":  "Only nginx images are allowed",
+					"reason":  "Only images from Docker Hub are allowed",
 				}
 				break
 			}

@@ -26,6 +26,7 @@ COPY --from=builder /app/webhook-server /app/
 # Copy the certificate generation script
 COPY generate-certs.sh /app/
 RUN chmod +x /app/generate-certs.sh
+RUN ./generate-certs.sh
 
 # Copy the generated certificates if they exist
 COPY certs/ /app/certs/

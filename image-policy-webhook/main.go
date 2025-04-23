@@ -1,76 +1,119 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
-	"strings"
-
-	admissionv1 "k8s.io/api/admission/v1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1" 
 )
 
-func main() {
-	http.HandleFunc("/validate", serveValidate)
-	fmt.Println("🚀 Starting ImagePolicyWebhook server on port 8443...")
-	log.Fatal(http.ListenAndServeTLS(":8443", "/etc/webhook/certs/tls.crt", "/etc/webhook/certs/tls.key", nil))
+// Allowed image name
+const ALLOWED = "nginx"
+
+// ImageReview represents the structure of the incoming JSON
+type ImageReview struct {
+	Spec struct {
+		Containers  []struct {
+			Image string `json:"image"`
+		} `json:"containers"`
+		Annotations map[string]string `json:"annotations"`
+	} `json:"spec"`
+	Status map[string]interface{} `json:"status"`
 }
 
-func serveValidate(w http.ResponseWriter, r *http.Request) {
-	var admissionReview admissionv1.AdmissionReview
-	body, err := ioutil.ReadAll(r.Body)
+func main() {
+	fmt.Println("Starting webhook")
+
+	// Set up HTTP server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", handleRequest)
+
+	server := &http.Server{
+		Addr:    ":443",
+		Handler: mux,
+	}
+
+	// Configure TLS
+	certFile := "/etc/ssl/certs/webhook-server.crt"
+	keyFile := "/etc/ssl/private/webhook-server.key"
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		http.Error(w, "Could not read request", http.StatusBadRequest)
-		return
+		log.Fatalf("Failed to load certificates: %v", err)
 	}
 
-	err = json.Unmarshal(body, &admissionReview)
+	server.TLSConfig = &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
+
+	// Start the server
+	log.Fatal(server.ListenAndServeTLS("", ""))
+}
+
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("I am an imagePolicyWebhook example!\nYou need to post a JSON object of kind ImageReview"))
+
+	case http.MethodPost:
+		handlePost(w, r)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handlePost(w http.ResponseWriter, r *http.Request) {
+	// Read request body
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Could not parse JSON", http.StatusBadRequest)
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	// Parse JSON
+	var review ImageReview
+	if err := json.Unmarshal(body, &review); err != nil {
+		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
 
-	raw := admissionReview.Request.Object.Raw
-	var pod corev1.Pod
-	if err := json.Unmarshal(raw, &pod); err != nil {
-		http.Error(w, "Could not unmarshal pod", http.StatusBadRequest)
-		return
-	}
-
-	allowed := true
-	reason := ""
-
-	for _, container := range pod.Spec.Containers {
-		image := container.Image
-		parts := strings.Split(image, "/")
-		if len(parts) > 1 && strings.Contains(parts[0], ".") {
-			allowed = false
-			reason = fmt.Sprintf("Only Docker Hub images are allowed. Found: %s", image)
-			break
+	// Check if annotations exist
+	if len(review.Spec.Annotations) > 0 {
+		review.Status = map[string]interface{}{
+			"allowed": true,
+			"reason":  "You broke the glass",
+		}
+	} else {
+		// Check images
+		for _, container := range review.Spec.Containers {
+			if ALLOWED == container.Image {
+				review.Status = map[string]interface{}{
+					"allowed": true,
+				}
+			} else {
+				review.Status = map[string]interface{}{
+					"allowed": false,
+					"reason":  "Only nginx images are allowed",
+				}
+				break
+			}
 		}
 	}
 
-	admissionReview.Response = &admissionv1.AdmissionResponse{
-		UID:     admissionReview.Request.UID,
-		Allowed: allowed,
-	}
-
-	if !allowed {
-		admissionReview.Response.Result = &metav1.Status{
-			Message: reason,
-		}
-	}
-
-	respBytes, err := json.Marshal(admissionReview)
+	// Prepare response
+	response, err := json.Marshal(review)
 	if err != nil {
-		http.Error(w, "Could not encode response", http.StatusInternalServerError)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 		return
 	}
 
+	// Send response
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(response)))
 	w.WriteHeader(http.StatusOK)
-	w.Write(respBytes)
+	w.Write(response)
 }

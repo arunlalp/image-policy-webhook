@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 )
 
 // Allowed image name
@@ -15,7 +16,7 @@ const ALLOWED = "nginx"
 // ImageReview represents the structure of the incoming JSON
 type ImageReview struct {
 	Spec struct {
-		Containers  []struct {
+		Containers []struct {
 			Image string `json:"image"`
 		} `json:"containers"`
 		Annotations map[string]string `json:"annotations"`
@@ -90,7 +91,7 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Check images
 		for _, container := range review.Spec.Containers {
-			if ALLOWED == container.Image {
+			if strings.Contains(container.Image, ALLOWED) {
 				review.Status = map[string]interface{}{
 					"allowed": true,
 				}

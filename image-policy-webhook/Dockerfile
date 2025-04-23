@@ -1,53 +1,50 @@
-# ----------- Stage 1: Builder ------------
+# ---------- Stage 1: Builder ----------
     FROM golang:1.23-alpine AS builder
 
-    # Set working directory
     WORKDIR /app
     
-    # Install OpenSSL and bash for generating certs
+    # Install dependencies
     RUN apk --no-cache add openssl bash
     
-    # Copy all source files and cert generation script
+    # Copy all Go source files and the cert script
     COPY . .
     
-    # Make cert script executable and generate certs
+    # Initialize and tidy go.mod during build
+    RUN go mod init webhook-server && go mod tidy
+    
+    # Generate certs
     RUN chmod +x ./generate-certs.sh && ./generate-certs.sh
     
-    # Build the Go application
+    # Build the Go app
     RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o webhook-server .
     
-    # ----------- Stage 2: Final Image ------------
+    # ---------- Stage 2: Final Image ----------
     FROM alpine:3.19
     
-    # Install CA certificates and required tools
+    # Install required packages
     RUN apk --no-cache add ca-certificates bash && \
         update-ca-certificates
     
-    # Create working directory
     WORKDIR /app
     
-    # Copy the built webhook server binary
+    # Copy the webhook binary and certs from the builder
     COPY --from=builder /app/webhook-server /app/
-    
-    # Copy generated certs from builder
     COPY --from=builder /app/certs /app/certs
     COPY --from=builder /app/keys /app/keys
     
-    # Set environment variables
+    # Environment variables (not sensitive, just paths)
     ENV CERT_FILE=/app/certs/webhook-server.crt
     ENV KEY_FILE=/app/keys/webhook-server.key
     ENV PORT=8443
     
-    # Create a non-root user and change ownership
+    # Create and use non-root user
     RUN addgroup -S webhook && adduser -S webhook -G webhook && \
         chown -R webhook:webhook /app
-    
-    # Switch to non-root user
     USER webhook
     
-    # Expose the webhook server port
+    # Expose the server port
     EXPOSE 8443
     
-    # Start the webhook server
+    # Entrypoint to run the server
     ENTRYPOINT ["/app/webhook-server"]
     

@@ -6,194 +6,70 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
 	"strings"
-)
 
-// ImageReview represents the structure of the admission request
-type ImageReview struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Spec       struct {
-			Containers  []Container       `json:"containers"`
-			Annotations map[string]string `json:"annotations"`
-	} `json:"spec"`
-	Status struct {
-			Allowed bool   `json:"allowed"`
-			Reason  string `json:"reason,omitempty"`
-	} `json:"status,omitempty"`
-}
-
-// Container defines the container definition in an admission request
-type Container struct {
-	Image string `json:"image"`
-}
-
-const (
-	// AllowedRegistry defines the allowed container registry
-	AllowedRegistry = "docker.io"
-	// AllowedImage defines the allowed image name
-	AllowedImage = "nginx"
+	admissionv1 "k8s.io/api/admission/v1"
+	corev1 "k8s.io/api/core/v1"
 )
 
 func main() {
-	// Setup logging
-	log.Println("Starting imagePolicyWebhook admission controller...")
-
-	// Define HTTP endpoints
-	http.HandleFunc("/", rootHandler)
-	http.HandleFunc("/validate", validateHandler)
-
-	// Get certificate paths from environment or use defaults
-	certFile := getEnvOrDefault("CERT_FILE", "./certs/webhook-server.crt")
-	keyFile := getEnvOrDefault("KEY_FILE", "./keys/webhook-server.key")
-
-	// Check if certificates exist
-	if _, err := os.Stat(certFile); os.IsNotExist(err) {
-			log.Printf("Certificate file %s does not exist", certFile)
-			log.Println("You can generate certificates using ./generate-certs.sh")
-			// For development/testing, we can optionally run without TLS
-			devMode := getEnvOrDefault("DEV_MODE", "false")
-			if devMode == "true" {
-					port := getEnvOrDefault("PORT", "8080")
-					serverAddr := fmt.Sprintf("0.0.0.0:%s", port)
-					log.Printf("Running in DEV_MODE without TLS on %s", serverAddr)
-					log.Fatal(http.ListenAndServe(serverAddr, nil))
-					return
-			}
-	}
-
-	// Setup HTTPS server
-	port := getEnvOrDefault("PORT", "8443")
-	serverAddr := fmt.Sprintf("0.0.0.0:%s", port)
-	log.Printf("Server listening on %s", serverAddr)
-	log.Fatal(http.ListenAndServeTLS(serverAddr, certFile, keyFile, nil))
+	http.HandleFunc("/validate", serveValidate)
+	fmt.Println("🚀 Starting ImagePolicyWebhook server on port 8443...")
+	log.Fatal(http.ListenAndServeTLS(":8443", "/etc/webhook/certs/tls.crt", "/etc/webhook/certs/tls.key", nil))
 }
 
-// getEnvOrDefault returns environment variable value or default if not set
-func getEnvOrDefault(key, defaultValue string) string {
-	if value, exists := os.LookupEnv(key); exists {
-			return value
-	}
-	return defaultValue
-}
-
-// rootHandler handles the root path requests
-func rootHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("I am an imagePolicyWebhook example!\nYou need to post a JSON object of kind ImageReview to /validate"))
-}
-
-// validateHandler handles webhook validation requests
-func validateHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			w.Write([]byte("Method not allowed. Only POST requests are supported."))
-			return
-	}
-
-	// Read request body
+func serveValidate(w http.ResponseWriter, r *http.Request) {
+	var admissionReview admissionv1.AdmissionReview
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-			log.Printf("Error reading body: %v", err)
-			http.Error(w, "Error reading request body", http.StatusBadRequest)
-			return
-	}
-	defer r.Body.Close()
-
-	// Parse JSON request
-	var review ImageReview
-	if err := json.Unmarshal(body, &review); err != nil {
-			log.Printf("Error unmarshaling JSON: %v", err)
-			http.Error(w, "Error parsing JSON request", http.StatusBadRequest)
-			return
+		http.Error(w, "Could not read request", http.StatusBadRequest)
+		return
 	}
 
-	// Check for "break-glass" annotations
-	if annotations := review.Spec.Annotations; annotations != nil && len(annotations) > 0 {
-			log.Println("Found annotations, applying break-glass policy")
-			review.Status.Allowed = true
-			review.Status.Reason = "You broke the glass"
-			sendResponse(w, review)
-			return
+	err = json.Unmarshal(body, &admissionReview)
+	if err != nil {
+		http.Error(w, "Could not parse JSON", http.StatusBadRequest)
+		return
 	}
 
-	// Validate each container image
+	raw := admissionReview.Request.Object.Raw
+	var pod corev1.Pod
+	if err := json.Unmarshal(raw, &pod); err != nil {
+		http.Error(w, "Could not unmarshal pod", http.StatusBadRequest)
+		return
+	}
+
 	allowed := true
 	reason := ""
 
-	for _, container := range review.Spec.Containers {
-			image := container.Image
-			log.Printf("Validating image: %s", image)
-
-			// Check if image is from DockerHub and is nginx
-			isAllowed := isNginxFromDockerHub(image)
-			if isAllowed {
-					log.Printf("Image %s is allowed", image)
-			} else {
-					log.Printf("Image %s is not allowed", image)
-					allowed = false
-					reason = "Only nginx images from DockerHub are allowed"
-					break
-			}
+	for _, container := range pod.Spec.Containers {
+		image := container.Image
+		parts := strings.Split(image, "/")
+		if len(parts) > 1 && strings.Contains(parts[0], ".") {
+			allowed = false
+			reason = fmt.Sprintf("Only Docker Hub images are allowed. Found: %s", image)
+			break
+		}
 	}
 
-	// Set the response status
-	review.Status.Allowed = allowed
+	admissionReview.Response = &admissionv1.AdmissionResponse{
+		UID:     admissionReview.Request.UID,
+		Allowed: allowed,
+	}
+
 	if !allowed {
-			review.Status.Reason = reason
+		admissionReview.Response.Result = &metav1.Status{
+			Message: reason,
+		}
 	}
 
-	sendResponse(w, review)
-}
-
-// isNginxFromDockerHub checks if an image is nginx from DockerHub
-func isNginxFromDockerHub(image string) bool {
-	// Common image formats:
-	// - nginx
-	// - docker.io/nginx
-	// - docker.io/library/nginx
-	// - nginx:latest
-	// - docker.io/nginx:latest
-	// - docker.io/library/nginx:latest
-
-	// First, strip off the tag/digest if present
-	imageParts := strings.Split(image, ":")
-	baseImage := imageParts[0]
-	
-	// Check for the simplest case: just "nginx"
-	if baseImage == AllowedImage {
-			return true
-	}
-	
-	// Check for docker.io/nginx
-	if baseImage == fmt.Sprintf("%s/%s", AllowedRegistry, AllowedImage) {
-			return true
-	}
-	
-	// Check for docker.io/library/nginx
-	if baseImage == fmt.Sprintf("%s/library/%s", AllowedRegistry, AllowedImage) {
-			return true
-	}
-	
-	return false
-}
-
-// sendResponse sends the JSON response back to the client
-func sendResponse(w http.ResponseWriter, review ImageReview) {
-	w.Header().Set("Content-Type", "application/json")
-	responseJSON, err := json.Marshal(review)
+	respBytes, err := json.Marshal(admissionReview)
 	if err != nil {
-			log.Printf("Error marshaling response: %v", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
+		http.Error(w, "Could not encode response", http.StatusInternalServerError)
+		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(responseJSON)
+	w.Write(respBytes)
 }
